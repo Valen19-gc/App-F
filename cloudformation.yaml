@@ -1,0 +1,291 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Party Games App — EC2 + ALB + Docker
+  Clona el repo de GitHub, construye la imagen y arranca el contenedor.
+  URL pública: el DNS automático del ALB (sin Route53, sin dominio propio).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARAMETERS
+# ─────────────────────────────────────────────────────────────────────────────
+Parameters:
+
+  GitHubRepoUrl:
+    Type: String
+    Description: "URL del repositorio GitHub (HTTPS). Ej: https://github.com/TU_USUARIO/party-games.git"
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+    Description: "Tipo de instancia EC2 (t3.micro es elegible para Free Tier)"
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: "Par de claves EC2 para acceso SSH (debe existir en tu cuenta)"
+
+  AllowedSSHCidr:
+    Type: String
+    Default: "0.0.0.0/0"
+    Description: "CIDR desde el que se permite SSH. Cambia a tu IP para mayor seguridad (ej: 1.2.3.4/32)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAPPINGS — AMI de Ubuntu 24.04 LTS por región
+# ─────────────────────────────────────────────────────────────────────────────
+Mappings:
+  RegionAMI:
+    us-east-1:      { AMI: ami-0c7217cdde317cfec }
+    us-east-2:      { AMI: ami-05fb0b8c1424f266b }
+    us-west-1:      { AMI: ami-0ce2cb35386fc22e9 }
+    us-west-2:      { AMI: ami-008fe2fc65df48dac }
+    eu-west-1:      { AMI: ami-0905a3c97561e0b69 }
+    eu-west-2:      { AMI: ami-0e5f882be1900e43b }
+    eu-west-3:      { AMI: ami-00983e8a26e4c9bd9 }
+    eu-central-1:   { AMI: ami-06dd92ecc74fdfb36 }
+    eu-south-1:     { AMI: ami-0a6dc7529cd559185 }
+    ap-southeast-1: { AMI: ami-078c1149d8ad719a7 }
+    ap-northeast-1: { AMI: ami-0d52744d6551d851e }
+    sa-east-1:      { AMI: ami-0fb4cf3a99aa89f72 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESOURCES
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── VPC ────────────────────────────────────────────────────────────────────
+  PartyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: party-games-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: party-games-igw
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref PartyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ── Subnets (2 AZs para el ALB) ────────────────────────────────────────────
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PartyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: party-games-subnet-a
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PartyVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: party-games-subnet-b
+
+  # ── Route Table ────────────────────────────────────────────────────────────
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PartyVPC
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetARouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  SubnetBRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # ── Security Groups ────────────────────────────────────────────────────────
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "ALB — acepta HTTP desde internet"
+      VpcId: !Ref PartyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: party-games-alb-sg
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "EC2 — acepta trafico del ALB y SSH"
+      VpcId: !Ref PartyVPC
+      SecurityGroupIngress:
+        # App port: solo desde el ALB
+        - IpProtocol: tcp
+          FromPort: 3001
+          ToPort: 3001
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        # SSH: desde CIDR configurado
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHCidr
+      Tags:
+        - Key: Name
+          Value: party-games-ec2-sg
+
+  # ── EC2 Instance ───────────────────────────────────────────────────────────
+  PartyGameInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionAMI, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            set -e
+            exec > /var/log/party-games-init.log 2>&1
+
+            echo "=== Party Games EC2 Init ==="
+            date
+
+            # Update & install Docker + Git
+            apt-get update -y
+            apt-get install -y docker.io git
+
+            systemctl enable docker
+            systemctl start docker
+
+            # Wait for Docker daemon
+            until docker info > /dev/null 2>&1; do sleep 2; done
+
+            # Clone repo
+            REPO_URL="${GitHubRepoUrl}"
+            APP_DIR="/opt/party-games"
+
+            git clone "$REPO_URL" "$APP_DIR"
+            cd "$APP_DIR"
+
+            # Data volume for SQLite persistence
+            mkdir -p /opt/party-games-data
+
+            # Build image
+            docker build -t party-games:latest .
+
+            # Run container
+            docker run -d \
+              --name party-games \
+              --restart always \
+              -p 3001:3001 \
+              -v /opt/party-games-data:/app/data \
+              party-games:latest
+
+            echo "=== Init complete ==="
+            docker ps
+      Tags:
+        - Key: Name
+          Value: party-games-ec2
+
+  # ── Application Load Balancer ──────────────────────────────────────────────
+  PartyALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: party-games-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: party-games-alb
+
+  # ── Target Group ───────────────────────────────────────────────────────────
+  PartyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: party-games-tg
+      Protocol: HTTP
+      Port: 3001
+      VpcId: !Ref PartyVPC
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref PartyGameInstance
+          Port: 3001
+
+  # ── Listener HTTP:80 ───────────────────────────────────────────────────────
+  PartyListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref PartyALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref PartyTargetGroup
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  AppURL:
+    Description: "URL pública de la app (DNS automático del ALB)"
+    Value: !Sub "http://${PartyALB.DNSName}"
+    Export:
+      Name: PartyGamesURL
+
+  EC2PublicIP:
+    Description: "IP pública de la EC2 para SSH"
+    Value: !GetAtt PartyGameInstance.PublicIp
+
+  EC2SSHCommand:
+    Description: "Comando SSH para conectarte a la instancia"
+    Value: !Sub "ssh -i ${KeyPairName}.pem ubuntu@${PartyGameInstance.PublicIp}"
+
+  ALBDNSName:
+    Description: "DNS del ALB"
+    Value: !GetAtt PartyALB.DNSName
