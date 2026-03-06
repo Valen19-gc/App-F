@@ -73,6 +73,5 @@ Frontend en `http://localhost:5173` → proxy a backend en `localhost:3001`.
 - **7 jugadores**, cada ronda:
   - ⚽ Futbolín: 2 vs 2
   - 🎱 Billar: 2 vs 1
-  - 😴 1 jugador descansa
 - **Puntuación**: 3 puntos al equipo ganador
 - El algoritmo garantiza que todos jueguen con todos y descansen igual
