@@ -8,7 +8,6 @@ export default function Tournament() {
   const [tournaments, setTournaments] = useState([])
   const [players, setPlayers] = useState([])
   const [name, setName] = useState('')
-  const [rounds, setRounds] = useState(6)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const navigate = useNavigate()
@@ -31,7 +30,7 @@ export default function Tournament() {
       const res = await fetch(`${API}/tournaments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), numRounds: rounds })
+        body: JSON.stringify({ name: name.trim() })
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
@@ -60,16 +59,11 @@ export default function Tournament() {
       {canCreate && (
         <div className={styles.createBox}>
           <h2 className={styles.createTitle}>Nuevo Torneo</h2>
+          <p className={styles.createHint}>Las rondas se generan automaticamente. Tu decides cuando terminar.</p>
           <form onSubmit={createTournament} className={styles.form}>
             <input className={styles.input} value={name} onChange={e => setName(e.target.value)} placeholder="Nombre del torneo (ej. Fiesta de Samu)" maxLength={50} />
-            <div className={styles.roundsRow}>
-              <label className={styles.label}>Rondas:</label>
-              {[4,5,6,7,8].map(n => (
-                <button key={n} type="button" className={styles.roundBtn} data-active={rounds === n} onClick={() => setRounds(n)}>{n}</button>
-              ))}
-            </div>
             <button className={styles.createBtn} type="submit" disabled={loading || !name.trim()}>
-              {loading ? 'Generando...' : 'Generar Rondas'}
+              {loading ? 'Generando...' : '🎲 Empezar Torneo'}
             </button>
           </form>
           {error && <p className={styles.error}>⚠ {error}</p>}
@@ -86,7 +80,7 @@ export default function Tournament() {
                   <div className={styles.tDate}>{new Date(t.created_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
                 </div>
                 <div className={styles.tActions}>
-                  <span className={styles.tStatus} data-status={t.status}>{t.status}</span>
+                  <span className={styles.tStatus} data-status={t.status}>{t.status === 'finished' ? 'Finalizado' : 'Activo'}</span>
                   <button className={styles.deleteBtn} onClick={(e) => deleteTournament(t.id, e)}>✕</button>
                 </div>
               </Link>
